@@ -42,7 +42,8 @@ class RandomEnv(gym.Env):
         return self._request(None)[0]
     def render(self, mode='human', close=False):
         action, obs, reward, done, info = self.state
-        if action is None: print("{}\n".format(obs))
+        if action is None:
+            print(f"{obs}\n")
         else: print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), obs))
 
 
@@ -97,15 +98,16 @@ class RandomEnv(gym.Env):
             ('float64', np.float64, (2,)),
             ('byte', np.uint8, (2,)),
         ])
-        dtype = np.dtype([
-            ('dt_sub', dt_sub),
-            ('byte', np.uint8),
-            ('2Darray', np.uint8, (2,3)),
-            ('discrete6', np.int64),
-            ('float64', np.float64),
-            ('bools', np.bool, (5,)),
-        ])
-        return dtype
+        return np.dtype(
+            [
+                ('dt_sub', dt_sub),
+                ('byte', np.uint8),
+                ('2Darray', np.uint8, (2, 3)),
+                ('discrete6', np.int64),
+                ('float64', np.float64),
+                ('bools', np.bool, (5,)),
+            ]
+        )
 
 
 
@@ -142,12 +144,24 @@ class RandomEnv(gym.Env):
         obs_space.spaces['bools'] = gym.spaces.Box(low=0, high=1, shape=(5,), dtype=np.bool)
         obs_space.spaces['image'] = gym.spaces.Box(low=0, high=255, shape=(3,3,3), dtype=np.uint8)
         for i in range(2):
-            obs_space.spaces['v'+str(i)] = gym.spaces.Dict()
-            obs_space.spaces['v'+str(i)].spaces['float64'] = gym.spaces.Box(low=np.NINF, high=np.inf, shape=(1,), dtype=np.float64)
-            obs_space.spaces['v'+str(i)].spaces['byte'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
-            obs_space.spaces['t'+str(i)] = gym.spaces.Dict()
-            obs_space.spaces['t'+str(i)].spaces['float16'] = gym.spaces.Box(low=np.NINF, high=np.inf, shape=(3,1), dtype=np.float16)
-            obs_space.spaces['t'+str(i)].spaces['byte'] = gym.spaces.Box(low=0, high=255, shape=(3,), dtype=np.uint8)
+            obs_space.spaces[f'v{str(i)}'] = gym.spaces.Dict()
+            obs_space.spaces[f'v{str(i)}'].spaces['float64'] = gym.spaces.Box(
+                low=np.NINF, high=np.inf, shape=(1,), dtype=np.float64
+            )
+
+            obs_space.spaces[f'v{str(i)}'].spaces['byte'] = gym.spaces.Box(
+                low=0, high=255, shape=(1,), dtype=np.uint8
+            )
+
+            obs_space.spaces[f't{str(i)}'] = gym.spaces.Dict()
+            obs_space.spaces[f't{str(i)}'].spaces['float16'] = gym.spaces.Box(
+                low=np.NINF, high=np.inf, shape=(3, 1), dtype=np.float16
+            )
+
+            obs_space.spaces[f't{str(i)}'].spaces['byte'] = gym.spaces.Box(
+                low=0, high=255, shape=(3,), dtype=np.uint8
+            )
+
 
         return obs_space
 
@@ -171,17 +185,15 @@ class RandomEnv(gym.Env):
             ('byte', np.uint8, (3,)),
         ])
         for i in range(2):
-            types.append(('v'+str(i), dt_sub))
-            types.append(('t'+str(i), dt_itm))
-        dtype = np.dtype(types)
-        return dtype
+            types.append((f'v{str(i)}', dt_sub))
+            types.append((f't{str(i)}', dt_itm))
+        return np.dtype(types)
 
 
 
     def _request(self, action):
         obs = self.obs_zero
         reward = np.float64(0.0)
-        done = False
         info = {}
 
         # if action is None: print("RandomEnv reset")
@@ -201,9 +213,7 @@ class RandomEnv(gym.Env):
             # }
             # obs = np.zeros(shape=self.observation_space.shape, dtype=self.observation_space.dtype)
         reward = np.float64(np.random.standard_normal())
-        # reward = np.float64(np.random.standard_cauchy())
-        if np.random.randint(10) >= 9: done = True
-
+        done = np.random.randint(10) >= 9
         self.state = (action, obs, reward, done, info)
         return obs, reward, done, info
 
