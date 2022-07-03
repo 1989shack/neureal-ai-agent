@@ -22,18 +22,11 @@ def get_spec(space, space_name='obs', name='', compute_dtype='float64', net_attn
         spec = [{'space_name':space_name, 'name':name, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out),
             'dist_type':'c', 'num_components':space.n, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]
         zero, zero_out = [tf.constant([[0]], dtype)], [tf.constant([[0]], dtype_out)]
-    # elif isinstance(space, gym.spaces.MultiDiscrete): # TODO
-    #     dtype, dtype_out = tf.dtypes.as_dtype(space.dtype), tf.dtypes.as_dtype('int32')
-    #     event_size = int(np.prod(space.shape).item())
-    #     num_latents = 1 if not net_attn_io else aio_max_latents if event_size > aio_max_latents else event_size
-    #     spec = [{'space_name':space_name, 'name':name, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.zeros_like(space.nvec,dtype_out), 'max':tf.constant(space.nvec-1,dtype_out),
-    #         'dist_type':'c', 'num_components':space.nvec, 'event_shape':space.shape, 'event_size':event_size, 'channels':1, 'step_shape':tf.TensorShape([1]+list(space.shape)), 'num_latents':num_latents}]
-    #     zero, zero_out = [tf.constant([[0]], dtype)], [tf.constant([[0]], dtype_out)]
     elif isinstance(space, gym.spaces.Box):
         dtype, dtype_out = tf.dtypes.as_dtype(space.dtype), tf.dtypes.as_dtype(compute_dtype)
         # event_size, channels = int(np.prod(space.shape).item()), 1 # TODO try splitting down to individual scaler level # _split-channels-obs
         event_size, channels = int(np.prod(space.shape[:-1]).item()), space.shape[-1]
-        num_latents = 1 if not net_attn_io else aio_max_latents if event_size > aio_max_latents else event_size
+        num_latents = min(event_size, aio_max_latents) if net_attn_io else 1
         spec = [{'space_name':space_name, 'name':name, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out),
             'dist_type':'mx', 'num_components':int(np.prod(space.shape).item()*mixture_multi), 'event_shape':space.shape, 'event_size':event_size, 'channels':channels, 'step_shape':tf.TensorShape([1]+list(space.shape)), 'num_latents':num_latents}]
         zero, zero_out = [tf.zeros([1]+list(space.shape), dtype)], [tf.zeros([1]+list(space.shape), dtype_out)]
@@ -41,8 +34,19 @@ def get_spec(space, space_name='obs', name='', compute_dtype='float64', net_attn
         spec, zero, zero_out = [], [], []
         loop = space.spaces.items() if isinstance(space, gym.spaces.Dict) else enumerate(space.spaces)
         for k,s in loop:
-            spec_sub, zero_sub, zero_out_sub = get_spec(s, space_name=space_name, name=('' if name=='' else name+'_')+str(k), compute_dtype=compute_dtype, net_attn_io=net_attn_io, aio_max_latents=aio_max_latents, mixture_multi=mixture_multi)
-            spec += spec_sub; zero += zero_sub; zero_out += zero_out_sub
+            spec_sub, zero_sub, zero_out_sub = get_spec(
+                s,
+                space_name=space_name,
+                name=('' if name == '' else f'{name}_') + str(k),
+                compute_dtype=compute_dtype,
+                net_attn_io=net_attn_io,
+                aio_max_latents=aio_max_latents,
+                mixture_multi=mixture_multi,
+            )
+
+            spec += spec_sub
+            zero += zero_sub
+            zero_out += zero_out_sub
     return spec, zero, zero_out
 
 

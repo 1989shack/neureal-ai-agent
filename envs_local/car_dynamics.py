@@ -120,7 +120,7 @@ class Car:
         gas = np.clip(gas, 0, 1)
         for w in self.wheels[2:4]:
             diff = gas - w.gas
-            if diff > 0.1: diff = 0.1  # gradually increase, but stop immediately
+            diff = min(diff, 0.1)
             w.gas += diff
 
     def brake(self, b):
@@ -232,8 +232,10 @@ class Car:
                 s2 = math.sin(a2)
                 c1 = math.cos(a1)
                 c2 = math.cos(a2)
-                if s1 > 0 and s2 > 0: continue
-                if s1 > 0: c1 = np.sign(c1)
+                if s1 > 0:
+                    if s2 > 0:
+                        continue
+                    c1 = np.sign(c1)
                 if s2 > 0: c2 = np.sign(c2)
                 white_poly = [
                     (-WHEEL_W*SIZE, +WHEEL_R*c1*SIZE), (+WHEEL_W*SIZE, +WHEEL_R*c1*SIZE),
@@ -242,10 +244,11 @@ class Car:
                 viewer.draw_polygon([trans*v for v in white_poly], color=WHEEL_WHITE)
 
     def _create_particle(self, point1, point2, grass):
+
         class Particle:
             pass
         p = Particle()
-        p.color = WHEEL_COLOR if not grass else MUD_COLOR
+        p.color = MUD_COLOR if grass else WHEEL_COLOR
         p.ttl = 1
         p.poly = [(point1[0], point1[1]), (point2[0], point2[1])]
         p.grass = grass

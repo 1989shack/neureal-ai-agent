@@ -17,7 +17,7 @@ def replace_infnan(inputs, replace):
 
 # TODO tf.keras.layers.Discretization ?
 def discretize(inputs, spec):
-    if spec['dtype'] == tf.uint8 or spec['dtype'] == tf.int32 or spec['dtype'] == tf.int64: inputs = tf.math.round(inputs)
+    if spec['dtype'] in [tf.uint8, tf.int32, tf.int64]: inputs = tf.math.round(inputs)
     inputs = tf.clip_by_value(inputs, spec['min'], spec['max'])
     inputs = tf.cast(inputs, spec['dtype'])
     # inputs = tf.dtypes.saturate_cast(inputs, spec['dtype'])
@@ -78,7 +78,7 @@ def net_build(net, initializer):
     net.reset_states()
     net.weights_reset = []
     for w in net.weights:
-        w.is_kernel = True if "/kernel:" in w.name else False
+        w.is_kernel = "/kernel:" in w.name
         if w.is_kernel: w.assign(initializer(w.shape))
         net.weights_reset.append(w.value())
     net.initializer = initializer
@@ -138,8 +138,7 @@ class LearnRateThresh():
     def __call__(self, metric):
         thresh_idx = tf.searchsorted(self.thresh, tf.reshape(tf.cast(metric,tf.float64),(1,)))
         learn_rate_idx = self.thresh_rates[thresh_idx[0]]
-        learn_rate = self.learn_rate_cats[learn_rate_idx]
-        return learn_rate
+        return self.learn_rate_cats[learn_rate_idx]
 
 
 def loss_diff(out, targets=None): # deterministic difference
@@ -284,13 +283,10 @@ class Deterministic(tfp.layers.DistributionLambda):
         # print("tracing -> Deterministic new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         params = tf.reshape(params, output_shape)
-        # dist = tfp.distributions.Deterministic(loc=params)
-        dist = DeterministicSub(loc=params)
-        return dist
+        return DeterministicSub(loc=params)
     @staticmethod
     def params_size(event_shape=(), name=None):
-        params_size = np.prod(event_shape).item()
-        return params_size
+        return np.prod(event_shape).item()
 
 class Categorical(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), dtype_cat=tf.int32, **kwargs):
@@ -313,8 +309,7 @@ class Categorical(tfp.layers.DistributionLambda):
     @staticmethod
     def params_size(num_components, event_shape=(), name=None):
         event_size = np.prod(event_shape).item()
-        params_size = event_size * num_components
-        return params_size
+        return event_size * num_components
 
 class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
     def __init__(self, event_shape=(), temperature=1e-5, **kwargs):
@@ -340,8 +335,7 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
     def params_size(event_shape=(), name=None):
         num_components, event_shape = event_shape[-1], event_shape[:-1]
         event_size = np.prod(event_shape).item()
-        params_size = event_size * num_components
-        return params_size
+        return event_size * num_components
 
 
 class MixtureSameFamily(tfp.distributions.MixtureSameFamily):
@@ -403,15 +397,16 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         # dist_component = tfp.distributions.Logistic(loc=loc_params, scale=scale_params)
         dist_component = Logistic(loc=loc_params, scale=scale_params)
         dist_components = tfp.distributions.Independent(dist_component, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
-        dist = MixtureSameFamily(mixture_distribution=dist_mixture, components_distribution=dist_components)
         # dist = MixtureSameFamily(mixture_distribution=dist_mixture, components_distribution=dist_components, reparameterize=True) # better spread of loc and scale params, rep net works better, can have bugs
 
-        return dist
+        return MixtureSameFamily(
+            mixture_distribution=dist_mixture,
+            components_distribution=dist_components,
+        )
     @staticmethod
     def params_size(num_components, event_shape=(), name=None):
         event_size = np.prod(event_shape).item()
-        params_size = num_components + event_size * num_components * 2
-        return params_size
+        return num_components + event_size * num_components * 2
 
 
 
@@ -481,7 +476,8 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             value = tf.reshape(value, (1, -1, latent_size))
             query = self._init_latent if num_latents is None else self._init_latent[:,:num_latents]
         else: query = value
-        batch_size = 1; neg_batch_size = -1; time_size = tf.shape(value)[1]
+        batch_size = 1
+        time_size = tf.shape(value)[1]
         # batch_size = tf.shape(value)[0]; neg_batch_size = -batch_size; time_size = tf.shape(value)[1]
         if not self._built_from_signature: self._build_from_signature(query=query, value=value, key=None)
 
@@ -512,13 +508,14 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             if use_img and not store_real: mem_idx, memory = self._mem_idx_img, self._memory_img
             else: mem_idx, memory = self._mem_idx, self._memory
 
+            neg_batch_size = -1
             drop_off = tf.roll(memory, shift=neg_batch_size, axis=0)
             memory.assign(drop_off)
             memory[neg_batch_size:].assign(value)
 
             if mem_idx > 0:
                 mem_idx_next = mem_idx - batch_size
-                if mem_idx_next < 0: mem_idx_next = 0
+                mem_idx_next = max(mem_idx_next, 0)
                 mem_idx.assign(mem_idx_next)
 
         # TODO loop through value or query if too big for memory?

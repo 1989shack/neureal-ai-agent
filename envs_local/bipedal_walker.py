@@ -91,7 +91,7 @@ class ContactDetector(contactListener):
         contactListener.__init__(self)
         self.env = env
     def BeginContact(self, contact):
-        if self.env.hull==contact.fixtureA.body or self.env.hull==contact.fixtureB.body:
+        if self.env.hull in [contact.fixtureA.body, contact.fixtureB.body]:
             self.env.game_over = True
         for leg in [self.env.legs[1], self.env.legs[3]]:
             if leg in [contact.fixtureA.body, contact.fixtureB.body]:
@@ -200,7 +200,7 @@ class BipedalWalker(gym.Env, EzPickle):
                 counter += 2
                 original_y = y
 
-            elif state==PIT and not oneshot:
+            elif state == PIT:
                 y = original_y
                 if counter > 1:
                     y -= 4*TERRAIN_STEP
@@ -238,7 +238,7 @@ class BipedalWalker(gym.Env, EzPickle):
                     self.terrain.append(t)
                 counter = stair_steps*stair_width
 
-            elif state==STAIRS and not oneshot:
+            elif state == STAIRS:
                 s = stair_steps*stair_width - counter - stair_height
                 n = s/stair_width
                 y = original_y + (n*stair_height)*TERRAIN_STEP
@@ -250,11 +250,9 @@ class BipedalWalker(gym.Env, EzPickle):
                 counter = self.np_random.randint(TERRAIN_GRASS/2, TERRAIN_GRASS)
                 if state==GRASS and hardcore:
                     state = self.np_random.randint(1, _STATES_)
-                    oneshot = True
                 else:
                     state = GRASS
-                    oneshot = True
-
+                oneshot = True
         self.terrain_poly = []
         for i in range(TERRAIN_LENGTH-1):
             poly = [
@@ -276,15 +274,15 @@ class BipedalWalker(gym.Env, EzPickle):
     def _generate_clouds(self):
         # Sorry for the clouds, couldn't resist
         self.cloud_poly   = []
-        for i in range(TERRAIN_LENGTH//20):
+        for _ in range(TERRAIN_LENGTH//20):
             x = self.np_random.uniform(0, TERRAIN_LENGTH)*TERRAIN_STEP
             y = VIEWPORT_H/SCALE*3/4
             poly = [
                 (x+15*TERRAIN_STEP*math.sin(3.14*2*a/5)+self.np_random.uniform(0,5*TERRAIN_STEP),
                  y+ 5*TERRAIN_STEP*math.cos(3.14*2*a/5)+self.np_random.uniform(0,5*TERRAIN_STEP) )
                 for a in range(5) ]
-            x1 = min( [p[0] for p in poly] )
-            x2 = max( [p[0] for p in poly] )
+            x1 = min(p[0] for p in poly)
+            x2 = max(p[0] for p in poly)
             self.cloud_poly.append( (poly,x1,x2) )
 
     def reset(self):
@@ -523,7 +521,7 @@ if __name__=="__main__":
         if steps % 20 == 0 or done:
             print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
             print("step {} total_reward {:+0.2f}".format(steps, total_reward))
-            print("hull " + str(["{:+0.2f}".format(x) for x in s[0:4] ]))
+            print("hull " + str(["{:+0.2f}".format(x) for x in s[:4]]))
             print("leg0 " + str(["{:+0.2f}".format(x) for x in s[4:9] ]))
             print("leg1 " + str(["{:+0.2f}".format(x) for x in s[9:14]]))
         steps += 1

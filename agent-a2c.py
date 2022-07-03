@@ -43,19 +43,13 @@ def gym_action_dist(action_space, dtype=tf.float32, cat_dtype=tf.int32, num_comp
                 dists = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Independent(
                     tfp.distributions.Categorical(logits=tf.reshape(input, tf.concat([tf.shape(input)[:-1], params_shape], axis=0)), dtype=cat_dtype), reinterpreted_batch_ndims=len(event_shape)
                 ))
-        elif action_space.dtype == np.float32 or action_space.dtype == np.float64:
-            if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
-                # params_size = tfp.layers.MixtureSameFamily.params_size(num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
-                # dists = tfp.layers.MixtureSameFamily(num_components, tfp.layers.MultivariateNormalTriL(event_size))
-                params_size = tfp.layers.MixtureLogistic.params_size(num_components, event_shape)
-                dists = tfp.layers.MixtureLogistic(num_components, event_shape)
-            else:
-                params_size = tfp.layers.MixtureLogistic.params_size(num_components, event_shape)
-                dists = tfp.layers.MixtureLogistic(num_components, event_shape)
+        elif action_space.dtype in [np.float32, np.float64]:
+            # params_size = tfp.layers.MixtureSameFamily.params_size(num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
+            # dists = tfp.layers.MixtureSameFamily(num_components, tfp.layers.MultivariateNormalTriL(event_size))
+            params_size = tfp.layers.MixtureLogistic.params_size(num_components, event_shape)
+            dists = tfp.layers.MixtureLogistic(num_components, event_shape)
             # self.bijector = tfp.bijectors.Sigmoid(low=-1.0, high=1.0)
             is_discrete = False
-    # TODO expand to handle Tuple+Dict, make so discrete and continuous can be output at the same time
-    # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
     elif isinstance(action_space, gym.spaces.Tuple):
         dists = [None]*len(action_space.spaces)
         for i,space in enumerate(action_space.spaces):
@@ -91,8 +85,7 @@ def gym_obs_get(obs_space, x):
     if isinstance(obs_space, gym.spaces.Discrete): return np.asarray([x], obs_space.dtype)
     elif isinstance(obs_space, gym.spaces.Box): return x
     elif isinstance(obs_space, gym.spaces.Dict):
-        rtn = gym_flatten(obs_space, x, dtype=obs_space.dtype)
-        return rtn
+        return gym_flatten(obs_space, x, dtype=obs_space.dtype)
 
 
 def gym_action_get_mem(action_space, size):
@@ -103,8 +96,11 @@ def gym_action_get_mem(action_space, size):
         for i,space in enumerate(action_space.spaces): actions[i] = gym_action_get_mem(space,size)
         return actions
     elif isinstance(action_space, gym.spaces.Dict):
-        actions = {}
-        for k,space in action_space.spaces.items(): actions[k] = gym_action_get_mem(space,size)
+        actions = {
+            k: gym_action_get_mem(space, size)
+            for k, space in action_space.spaces.items()
+        }
+
         return actions
 
 def gym_obs_get_mem(obs_space, size):
@@ -202,8 +198,7 @@ def np_to_tf(data, dtype=None):
         data_tf = [None]*len(data)
         for i,v in enumerate(data): data_tf[i] = np_to_tf(v, dtype=dtype)
     elif isinstance(data, dict):
-        data_tf = {}
-        for k,v in data.items(): data_tf[k] = np_to_tf(v, dtype=dtype)
+        data_tf = {k: np_to_tf(v, dtype=dtype) for k, v in data.items()}
     return data_tf
 
 
@@ -236,7 +231,18 @@ class ActorCriticAI(tf.keras.Model):
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 1024, 512, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 6, 6, 2048, 1024, 32
-        self.net_arch = "{}inD{}-{:02d}D{}-{:02d}LS{}-out{}".format('' if self.obs_is_vec else 'Conv2D-', inp, self.net_DNN, mid, self.net_LSTM, mid, 'D' if self.action_is_discrete else 'Cont'+str(self.action_num_components))
+        self.net_arch = "{}inD{}-{:02d}D{}-{:02d}LS{}-out{}".format(
+            '' if self.obs_is_vec else 'Conv2D-',
+            inp,
+            self.net_DNN,
+            mid,
+            self.net_LSTM,
+            mid,
+            'D'
+            if self.action_is_discrete
+            else f'Cont{self.action_num_components}',
+        )
+
 
         self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
         self.layer_flatten = tf.keras.layers.Flatten()
@@ -245,8 +251,26 @@ class ActorCriticAI(tf.keras.Model):
         ## action network
         # if not self.obs_is_vec: self.layer_action_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(evo), name='action_conv2d_in')
         self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_in')
-        for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
-        for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='action_lstm_{:02d}'.format(i)))
+        self.layer_action_dense.extend(
+            tf.keras.layers.Dense(
+                mid,
+                activation=util.EvoNormS0(evo),
+                use_bias=False,
+                name='action_dense_{:02d}'.format(i),
+            )
+            for i in range(self.net_DNN)
+        )
+
+        self.layer_action_lstm.extend(
+            tf.keras.layers.LSTM(
+                mid,
+                return_sequences=True,
+                stateful=True,
+                name='action_lstm_{:02d}'.format(i),
+            )
+            for i in range(self.net_LSTM)
+        )
+
         if not self.action_is_discrete: self.layer_action_dense_cont = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_cont')
         # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.action_params_size/4, 4, name='action_deconv1d_logits_out')
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.action_params_size, name='action_dense_logits_out')
@@ -254,8 +278,26 @@ class ActorCriticAI(tf.keras.Model):
         ## value network
         # if not self.obs_is_vec: self.layer_value_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(evo), name='value_conv2d_in')
         self.layer_value_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='value_dense_in')
-        for i in range(self.net_DNN+2): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
-        for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='value_lstm_{:02d}'.format(i)))
+        self.layer_value_dense.extend(
+            tf.keras.layers.Dense(
+                mid,
+                activation=util.EvoNormS0(evo),
+                use_bias=False,
+                name='value_dense_{:02d}'.format(i),
+            )
+            for i in range(self.net_DNN + 2)
+        )
+
+        self.layer_value_lstm.extend(
+            tf.keras.layers.LSTM(
+                mid,
+                return_sequences=True,
+                stateful=True,
+                name='value_lstm_{:02d}'.format(i),
+            )
+            for i in range(self.net_LSTM)
+        )
+
         self.layer_value_dense_out = tf.keras.layers.Dense(1, name='value_dense_out')
 
         # pre build model
@@ -342,15 +384,8 @@ class ActorCriticAI(tf.keras.Model):
     # def _loss_value(self, returns, values): # targets, output (returns, layer_value_dense_out)
     # def _loss_value(self, returns, values, advantages): # targets, output (returns, layer_value_dense_out)
     def _loss_value(self, advantages):
-        # Value loss is typically MSE between value estimates and returns.
-        # returns = tf.expand_dims(returns, 1)
-        # loss_value = self.loss_fn(returns, values)
-        # loss_value = tf.keras.losses.mean_squared_error(returns, values)
-        # loss_value = tf.math.square(advantages)
-        # loss_value = loss_value * self.value_c
-        loss_value = tf.math.square(advantages) * self.value_c
         # loss_value = tf.math.abs(advantages) * self.value_c # TODO try this when works in tf
-        return loss_value # shape = (batch size,)
+        return tf.math.square(advantages) * self.value_c
 
     @tf.function
     # def train(self, inputs, actions, returns, advantages, dones):
@@ -430,15 +465,16 @@ class AgentA2C:
                 update_mem(observations, step, next_obs)
                 action, values[step] = self.model.action_value(next_obs)
                 update_mem(actions, step, action)
-                
+
                 step_time_start = time.perf_counter_ns()
                 next_obs, rewards[step], dones[step], _ = env.step(action)
                 next_obs = gym_obs_get(env.observation_space, next_obs)
                 t_steps_total += (time.perf_counter_ns() - step_time_start) / 1e9 # seconds
                 steps_total += 1
-                if render:
-                    if not env.render(): epi_total_rewards = epi_total_rewards[:-1]; early_quit = True; break
-
+                if render and not env.render():
+                    epi_total_rewards = epi_total_rewards[:-1]
+                    early_quit = True
+                    break
                 epi_total_rewards[-1] += rewards[step]
                 epi_steps += 1
                 if dones[step]:
@@ -531,14 +567,16 @@ if __name__ == '__main__':
     env, model_name, batch_sz, glimt, trader = gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed), "gym-A2C-Trader2", 2048, 64.0, True
 
     # env.seed(0)
-    with tf.device('/device:GPU:'+str(device)):
+    with tf.device(f'/device:GPU:{device}'):
         model = ActorCriticAI(env, lr=args.learning_rate, value_c=args.value_c, entropy_c=args.entropy_c)
-        model_name += "-{}-{}-a{}".format(model.net_arch, machine, device)
+        model_name += f"-{model.net_arch}-{machine}-a{device}"
 
-        model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
+        model_file = f"{curdir}/tf-data-models-local/{model_name}.h5"
+        loaded_model = False
         if tf.io.gfile.exists(model_file):
             model.load_weights(model_file, by_name=True, skip_mismatch=True)
-            print("LOADED model weights from {}".format(model_file)); loaded_model = True
+            print(f"LOADED model weights from {model_file}")
+            loaded_model = True
         # print(model.call.pretty_printed_concrete_signatures()); quit(0)
         # model.summary(); quit(0)
 
@@ -549,18 +587,24 @@ if __name__ == '__main__':
         # print("Test Total Episode Reward: {}".format(reward_test))
 
         fmt = (util.print_time(t_total),util.print_time(t_avg_epi),t_avg_step)
-        info = "total runtime: {}    | avg-episode: {}    avg-step: {:12.8f}".format(*fmt); print(info)
-        argsinfo = "batch_sz:{}   num_updates:{}   learning_rate:{}   entropy_c:{}   value_c:{}   loaded_model:{}".format(batch_sz,args.num_updates,args.learning_rate,args.entropy_c,args.value_c,loaded_model); print(argsinfo)
+        info = "total runtime: {}    | avg-episode: {}    avg-step: {:12.8f}".format(*fmt)
+        print(info)
+        argsinfo = f"batch_sz:{batch_sz}   num_updates:{args.num_updates}   learning_rate:{args.learning_rate}   entropy_c:{args.entropy_c}   value_c:{args.value_c}   loaded_model:{loaded_model}"
+
+        print(argsinfo)
 
         if args.plot_results and epi_num > 1:
             name = model_name+time.strftime("-%Y_%m_%d-%H-%M")
             xrng = np.arange(0, epi_num, 1)
-            plt.figure(num=name, figsize=(24, 16), tight_layout=True); ax = []
+            plt.figure(num=name, figsize=(24, 16), tight_layout=True)
+            ax = []
 
             ax.insert(0, plt.subplot2grid((7, 1), (6, 0), rowspan=1))
             plt.plot(xrng, t_epi_times[::1]*(trader_speed if trader else 1.0), alpha=1.0, label='Episode Time')
             ax[0].set_ylim(0,glimt)
-            plt.xlabel('Episode'); plt.ylabel('Minutes'); plt.legend(loc='upper left')
+            plt.xlabel('Episode')
+            plt.ylabel('Minutes')
+            plt.legend(loc='upper left')
 
             ax.insert(0, plt.subplot2grid((7, 1), (5, 0), rowspan=1, sharex=ax[-1]))
             plt.plot(xrng, loss_total[::1], alpha=0.7, label='Total Loss')
@@ -568,7 +612,9 @@ if __name__ == '__main__':
             plt.plot(xrng, loss_value[::1], alpha=0.7, label='Value Loss')
             # ax[0].set_ylim(0,60)
             plt.grid(axis='y',alpha=0.5)
-            plt.xlabel('Episode'); plt.ylabel('Values'); plt.legend(loc='upper left')
+            plt.xlabel('Episode')
+            plt.ylabel('Values')
+            plt.legend(loc='upper left')
 
             ax.insert(0, plt.subplot2grid((7, 1), (0, 0), rowspan=5, sharex=ax[-1]))
             if trader:
@@ -582,9 +628,12 @@ if __name__ == '__main__':
                 epi_total_rewards_ema = talib.EMA(epi_total_rewards, timeperiod=epi_num//10+2)
                 plt.plot(xrng, epi_total_rewards_ema, alpha=0.7, label='Total Reward EMA')
             plt.grid(axis='y',alpha=0.5)
-            plt.xlabel('Episode'); plt.ylabel('USD'); plt.legend(loc='upper left');
+            plt.xlabel('Episode')
+            plt.ylabel('USD')
+            plt.legend(loc='upper left');
 
-            plt.title(name+"    "+argsinfo+"\n"+info); plt.show()
+            plt.title(f"{name}    {argsinfo}" + "\n" + info)
+            plt.show()
 
         model.save_weights(model_file)
-        print("SAVED model weights to {}".format(model_file))
+        print(f"SAVED model weights to {model_file}")
